@@ -5,6 +5,8 @@ dev-requirements.txt
 micropy.json
 requirements.txt
 pymakr.conf
+logo_inverted.jpg
+
 
 #### vscode ####
 .vscode/*

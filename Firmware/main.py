@@ -1,7 +1,7 @@
 """
 LucidSens(2021)
 
-This firmware has been written for the LucidSens device based on Micropython (Loboris port ESP32_LoBo_v3.2.24) and tested on the Espressif ESP32-Wrover-B/I modules with 4MB external SPI flash and 8MB PSRAM.
+This firmware has been written for the LucidSens device based on Micropython (Loboris port ESP32_LoBo_v3.2.24).
 
 Licensed under XXX:
 
@@ -12,9 +12,9 @@ aminhb@tutanota.com
 """
 # pylint: disable=no-name-in-module
 # pylint: disable=no-member
-import sys, os
-import _thread
-import gc
+# pylint: disable=eval-used
+
+import sys, os, _thread, gc
 from array import array
 from display import TFT
 from network import WLAN, STA_IF
@@ -22,6 +22,7 @@ from machine import Pin, ADC, DAC, PWM, RTC, DHT, stdin_get, stdout_put
 from utime import sleep, strftime, localtime
 import usocket as socket
 import ujson as json
+# from upysh import *
 
 # Color Codes
 GREEN = '\033[92m'
@@ -31,8 +32,11 @@ PINK  = '\033[95m'
 YELLOW = '\033[93m'
 WHITE = '\033[97m'
 
+# ST7735_INVOFF = const(0x20)
+# ST7735_INVON = const(0x21)
+
 gc.enable()
-print(GREEN + 'THREAD stack_size is: {}'.format(_thread.stack_size(3*4096)))
+print(GREEN + 'THREAD stack_size is: {}'.format(_thread.stack_size(6*4096)))
 for p in [5, 13, 14, 15, 21]:
     Pin(p, Pin.OUT, value=0)
 print('pins 5, 13, 14, 15, 21 were pulled down.' + WHITE)
@@ -68,74 +72,16 @@ class CommandHandler:
     """Handles the commands received from the GUI and calls the appropriate modules."""
     def __init__(self):
         self.clear = Clear()
-        self.stdout_put = stdout_put
-        self.seg_size = 256
-        self.read = ''
-
-    def read_until(self, ending, timeout=10000):
-        self.read = stdin_get(1, timeout)
-        if self.read is None:
-            return '\n'
-
-        timeout_count = 0
-        while True:
-            if self.read is not None:
-                if self.read.endswith(ending):
-                    break
-                else:
-                    new_data = stdin_get(1, timeout)
-                    self.read += new_data
-                    timeout_count = 0
-            else:
-                timeout_count += 1
-                if timeout is not None and timeout_count >= timeout:
-                    break
-        return self.read
-
-    def sender(self, response):
-        """Sends the response back to GUI over serial."""
-        self.clear()
-        def chopper(cmd):
-            data = []
-            segments = [cmd[i:i + self.seg_size] for i in range(0, len(cmd), self.seg_size)]
-            for idx, segment in enumerate(segments, start=1):
-                if segment == segments[-1]:
-                    data.append(segment + '*#')
-                else:
-                    data.append(segment + '<{}/{}>_#'.format(idx, len(segments)))
-            return data
-        if len(response) > self.seg_size:
-            for data in ([chunk for chunk in chopper(response)]):
-                for _ in range(3):
-                    self.stdout_put(data)
-                    sleep(0.5)
-                    resp = self.read_until('#', 5000)
-                    if 'EOF received.' in resp:
-                        return '\nresponse was successfully sent, exiting the sender, chopper involved.'
-                    elif 'got it.' in resp:
-                        break
-                    else:
-                        sleep(0.5)
-        else:
-            for _ in range(3):
-                self.stdout_put(response + "*#")
-                sleep(1)
-                resp = self.read_until('#', 5000)
-                if 'EOF received.' in resp:
-                    return '\nresponse was successfully sent, exiting the sender, no chopper.'
-                else:
-                    sleep(1)
-        return '\nexiting the CommandHandler_sender.'
 
     def test_mod(self, iterations):
-        """Checks the validity of USB-UART connection."""
+        """Checks the validity of USB-UART connection. Generates a list of an astroid's coordinates as a test sample."""
         n = iterations
         response = ({'header': 'test'})
         response.update({'body': [[(i, 0), (0, abs(abs(i) - n)), (0, -(abs(abs(i) - n)))] for i in range(-n, n + 1)]})
         jsnd_response = json.dumps(response)
         return jsnd_response
 
-    def operator_func(self, command):
+    def operator(self, command):
         """Processes the commands received and calls the required modules."""
         if command['header'] == 'test':
             astroid = self.test_mod(command['body']['it'])
@@ -143,20 +89,32 @@ class CommandHandler:
                 resp.write(astroid)
             with open('resp.txt', 'r') as r:
                 for line in r:
-                    return self.sender(line)
+                    return line
 
         elif command['header'] == 'incubation':
-            stpr = SamplingModule(13, 33, 32, 35)
-            _thread.start_new_thread('incubation_thrd', stpr.incubation_thrd, (1024, 50, 0, float(command['body']['it']), float(command['body']['ip']), str(command['body']['bf'])))
+            stpr = SamplingModule()
+            _thread.start_new_thread('incubation_thrd', stpr.incubation_thrd, (300, 50, 0,
+                float(command['body']['it']),
+                float(command['body']['ip']),
+                str(command['body']['bf'])))
             response = ({'header': 'incubation'})
-            response.update({'body': 'Incubation has been initialised.\n\nNote: you can cancel the incubation by clicking on the Stop button.'})
-            return self.sender(json.dumps(response))
+            response.update(
+                {'body':'Incubation has been initialised.\n\nNote: you may cancel the incubation by clicking on the Stop button.'})
+            return json.dumps(response)
 
         elif command['header'] == 'sampling':
-            stpr = SamplingModule(13, 33, 32, 35)
+            stpr = SamplingModule()
             # This code-block in thread halts the CPU!
-            # _thread.start_new_thread('sampling_thrd', stpr.sampling_thrd, (1, 1, int(command['body']['sn']), float(command['body']['st']), float(command['body']['si']), int(command['body']['r2avg']), str(command['body']['pmr']), float(command['body']['pv'])))
-            stpr.sampling_thrd(0, 1, float(command['body']['sqt']), int(command['body']['sn']), float(command['body']['st']), float(command['body']['si']), int(command['body']['r2avg']), str(command['body']['pmr']), float(command['body']['pv']))
+            # _thread.start_new_thread(...)
+            stpr.sampling_thrd(0, 1,
+                float(command['body']['sqt']),    # quiet time
+                int(command['body']['sn']),       # number of samples
+                float(command['body']['st']),     # total sampling time spent on each sample
+                float(command['body']['si']),     # sampling intervals
+                int(command['body']['r2avg']),    # raw-to-average
+                str(command['body']['pmr']),      # photodetection mode
+                float(command['body']['pv']),     # high voltage value
+                float(command['body']['e']))      # applied potential
 
         elif command['header'] == 'kill':
             for thrd in _thread.list(False):
@@ -164,19 +122,22 @@ class CommandHandler:
                     _thread.notify(thrd[0], _thread.EXIT)
             response = ({'header': 'kill'})
             response.update({'body': 'Incubation has been canceled.'})
-            return self.sender(json.dumps(response))
+            return json.dumps(response)
 
         elif command['header'] == 'wifi':
-            wfcreds = "ip = {}\nport = {}\nsubnet = {}\ngateway = {}\ndns = {}\nessid = {}\npassword = {}".format(command['body']['ip'], command['body']['port'], command['body']['subnet'], command['body']['gateway'], command['body']['dns'], command['body']['essid'], command['body']['password'])
-
+            wfcreds = "ip = {}\nport = {}\nsubnet = {}\ngateway = {}\ndns = {}\nessid = {}\npassword = {}".format(
+                command['body']['ip'],
+                command['body']['port'],
+                command['body']['subnet'],
+                command['body']['gateway'],
+                command['body']['dns'],
+                command['body']['essid'],
+                command['body']['password'])
             response = ({'header': 'wifi'})
             response.update({'body': 'Wifi credentials were updated on the LucidSens. Please restart the device and re-establish your connection.'})
-
             with open('wfcreds.txt', 'w') as f:
                 f.write(wfcreds)
-
-            return self.sender(json.dumps(response))
-
+            return json.dumps(response)
         else:
             pass
 
@@ -184,7 +145,7 @@ class DetectionModule:
     """Handles analog readings on pin (36: assigned to HV) and pins (34, 39: assigned to SiPM).
     Pin 25 was assigned to DAC
     """
-    def __init__(self, adc_pin, dac_pin=25, voltage=20):
+    def __init__(self, adc_pin, dac1_pin=25, voltage=20):
         self.adc = ADC(adc_pin)
         if adc_pin == 36:
             self.mode = 'hv'
@@ -194,21 +155,21 @@ class DetectionModule:
             raise RuntimeError('Invalid pin definition or wrong call.')
         self.voltage = voltage
         self.adc.atten(ADC.ATTN_11DB)
-        self.dac = DAC(dac_pin)
+        self.dac1 = DAC(dac1_pin)
 
     def sampler(self, acquisition=3, intervals=0.1, raw_to_avrg=10):
         """
-        acquisition: ADC total reading time in seconds
+        acquisition: ADC total read-time in seconds
         intervals: sampling intervals in seconds
-        raw_to_avrg: number of raw samples to be picked and averaged between two intervals
-        returns an array[list] of ADC read
+        raw_to_avrg: number of raw samples to be collected and averaged between the two intervals
+        returns an array[list] of the ADC read
         """
-        def dac_calibration(vol):
-            """DAC calibration module for a linear voltage-to-response response."""
-            return int((vol + 5.15) / 0.39)
+        def dac1_calibration(val):
+            """DAC calibration module for a linear voltage-to-response read."""
+            return int((val + 5.15) / 0.39)
 
         def adc_calibration(data):
-            """ADC calibration module for a linear signal-to-voltage response."""
+            """ADC calibration module for a linear signal-to-voltage read."""
             if self.mode == 'hv':
                 return (data + 176.3)/79.3 # calibrated on 8052021
             elif self.mode == 'sipm':
@@ -221,8 +182,7 @@ class DetectionModule:
         true_set = array('d')
         calib_set = array('d')
 
-        self.dac.write(dac_calibration(self.voltage))
-        print("DAC value: {}\nVoltage: {}V".format(self.dac, self.voltage))
+        self.dac1.write(dac1_calibration(self.voltage))
 
         for _ in range(int(acquisition/intervals)):
             self.adc.collect(freq=frq, data=datapoint)
@@ -251,22 +211,94 @@ class DetectionModule:
 
     def deinit(self):
         self.adc.deinit()
-        self.dac.write(0)
-        self.dac.deinit()
+        self.dac1.write(0)
+        self.dac1.deinit()
+
+class EJack:
+    # pylint: disable=too-many-instance-attributes
+    """ESP32 (PWM-based) Micropython class for DRV8825 stepper-motor driver.
+    pylint: disable=too-many-instance-attributes
+    """
+    def __init__(self, pwr_pin=19, dir_pin=2, step_pin=12):
+        """Initialization of the stepper driver associated with the side-stepper
+        Side_Stepper involved pins: 19, 2, 12
+        """
+        self.pwr = Pin(pwr_pin, Pin.INOUT, value=0)
+        self.dir = Pin(dir_pin, Pin.INOUT, value=0)
+        self.stepper = Pin(step_pin, Pin.OUT, value=0)
+        self.spr = 200  # 200 Steps per revolution: 360 / 1.8
+
+    def lift_up(self, rounds=500, delay=0.002):
+        """EJack lifts up."""
+        self.dir.value(0)
+        self.pwr.value(1)
+
+        try:
+            for _ in range(rounds):
+                self.stepper.value(1)
+                sleep(delay)
+                self.stepper.value(0)
+            self.pwr.value(0)
+        except KeyboardInterrupt:
+            self.pwr.value(0)
+            return 'aborted!'
+        except Exception as e:
+            print(e)
+            self.pwr.value(0)
+            return 'something is not right! shutting down.'
+
+    def pull_down(self, rounds=500, delay=0.002):
+        """EJack pulls down."""
+        self.dir.value(1)
+        self.pwr.value(1)
+        try:
+            for _ in range(rounds):
+                self.stepper.value(1)
+                sleep(delay)
+                self.stepper.value(0)
+            self.pwr.value(0)
+        except KeyboardInterrupt:
+            self.pwr.value(0)
+            return 'aborted!'
+        except Exception as e:
+            print(e)
+            self.pwr.value(0)
+            return 'something is not right! shutting down.'
+
+class EChem:
+    # pylint: disable=too-many-instance-attributes
+    """Initialises DAC2 and controls the potentials at the working electrode pin.
+    """
+    def __init__(self, dac2_pin=26):
+        self.dac2 = DAC(dac2_pin)
+
+    def dac2_calibration(self, val):
+        """DAC2 calibration module for a linear voltage-to-response read."""
+        return int((val - 0.087) / 0.012)
+
+    def applied_potential(self, e):
+        self.dac2.write(self.dac2_calibration(e))
+
+    def release(self):
+        self.dac2.write(0)
+
+    def deinit(self):
+        self.dac2.write(0)
+        self.dac2.deinit()
 
 class SamplingModule:
     # pylint: disable=too-many-instance-attributes
     """ESP32 (PWM-based) Micropython class for DRV8825 stepper-motor driver.
     pylint: disable=too-many-instance-attributes
     """
-    def __init__(self, pwr_pin, dir_pin, step_pin, intrptr_pin):
+    def __init__(self, pwr_pin=13, dir_pin=33, step_pin=32, intrptr_pin=35):
         """Initialization of the stepper driver and the peltier module."""
         self.pwr = Pin(pwr_pin, Pin.INOUT, value=0)
         self.dir = Pin(dir_pin, Pin.INOUT, value=0)
         self.intrptr = Pin(intrptr_pin, Pin.IN)
         self.step_pin = step_pin
-        self.spr = 200  # 200 Steps per revolution: 360 / 1.8
-        self.delay = 0.001  # Delay between steps
+        self.spr = 200
+        self.delay = 0.01
         self._current_temp = TemperatureSensor()
         self.current_temp = float()
         self.target_temp = float()
@@ -276,6 +308,8 @@ class SamplingModule:
         self.timer = 0
         self.blower = 'Off'
         self.collected_data = []
+        self.ejack = EJack()
+        self.echem = EChem()
 
     def incubation_thrd(self, freq=300, duty=50, direction=0, duration=1, target_temp=37, blower='On'):
         """Motor rotates for [duration]minutes."""
@@ -300,28 +334,32 @@ class SamplingModule:
 
             try:
                 self.current_temp = self._current_temp.read()
-                if self.current_temp != False:
-                    if self.current_temp[0] < int(self.target_temp - 3):
+                sleep(1)
+                if self.current_temp is not False:
+                    tft.ambient_sensor()
+                    if self.current_temp[0] < int(self.target_temp - 1):
+                        tft.temp_status('rising')
                         if self.pwr.value():
                             self.pwr.value(0)
-                            sleep(2)
+                            sleep(1)
 
                         if self.blower == 'On':
                             if not self.p_BF.value():
                                 self.p_BF.value(1)
-                                sleep(2)
-                        
+                                sleep(1)
+
                         if not self.p_EN.value():
                             self.p_EN.value(1)
 
                         if self.p_PH.value():
                             self.p_PH.value(0)
-                        sleep(5)
+                        sleep(15)
 
-                    elif self.current_temp[0] > int(self.target_temp + 3):
+                    elif self.current_temp[0] > int(self.target_temp + 1):
+                        tft.temp_status('falling')
                         if self.pwr.value():
                             self.pwr.value(0)
-                            sleep(2)
+                            sleep(1)
 
                         if self.blower == 'On':
                             if not self.p_BF.value():
@@ -330,22 +368,28 @@ class SamplingModule:
                         for pin in [self.p_EN, self.p_PH]:
                             if not pin.value():
                                 pin.value(1)
-                        sleep(5)
+                        sleep(15)
 
                     else:
                         for pin in [self.p_EN, self.p_BF, self.p_PH]:
                             pin.value(0)
                         sleep(3)
+                        tft.temp_status('idle')
                         self.dir.value(direction if direction in [0, 1] else 0)
                         stepper.duty(duty)
                         self.pwr.value(1)
                         for idx, frequency in enumerate(ramp):
-                            if int(self.target_temp - 2) <= self.current_temp <= int(self.target_temp + 2):
+                            # print(idx, frequency)
+                            if int(self.target_temp - 1) <= self.current_temp[0] <= int(self.target_temp + 1):
                                 stepper.freq(frequency)
                                 sleeping_time = round((duration / sum(ramp)) * frequency, 3)
+                                # print('@Frequency: {}Hz --- Duration: {}s'.format(frequency, sleeping_time))
                                 sleep(sleeping_time)
                                 self.timer -= sleeping_time
-                                self.current_temp = int(self._current_temp.read()[0])
+                                self.current_temp = self._current_temp.read()
+                                # print("current temperature: {}".format(self.current_temp[0]))
+                                sleep(1)
+                                tft.ambient_sensor()
 
                                 if self.timer < 5:
                                     stepper.deinit()
@@ -362,7 +406,7 @@ class SamplingModule:
                     pin.value(0)
                 return e
 
-    def sampling_thrd(self, direction=0, cycles=1, quiet_time=2.0, samples=3, acquisition_time=1, intervals=0.1, raw2avg=10, adc_read='Slow', pv=30):
+    def sampling_thrd(self, direction=0, cycles=1, quiet_time=2.0, samples=3, acquisition_time=1, intervals=0.1, raw2avg=10, adc_read='Slow', pv=30, e=1.0):
         """Motor rotates clockwise for [revs]cycles;
         in each cycle rotates for 200/[samples] * 1.8 degrees;
         stops for [acquisition_time]seconds on each sample."""
@@ -370,43 +414,51 @@ class SamplingModule:
         sleep(quiet_time)
         stepper = Pin(self.step_pin, Pin.OUT)
         self.collected_data = []
-        self.pwr.value(1)
         if adc_read == 'Slow':
-            sampler = DetectionModule(34,25,pv)
+            sampler = DetectionModule(34, 25, pv)
         else:
-            sampler = DetectionModule(39,25,pv)
+            sampler = DetectionModule(39, 25, pv)
+        self.interrupter()
+        self.pwr.value(1)
+        self.dir.value(direction if direction in [0, 1] else 0)
+        for thrd in _thread.list(False):
+            if thrd[2] == 'status_thrd':
+                _thread.notify(thrd[0], _thread.EXIT)
 
         while True:
-            notif = _thread.getnotification()
-            if notif == _thread.EXIT:
-                print('\nincubation_thrd: EXIT command received.')
-                self.p_EN.value(0)
-                self.p_BF.value(0)
-                self.interrupter()
-                print('\ninterrupter is done')
-                return
             try:
-                self.dir.value(direction if direction in [0, 1] else 0)
                 for _ in range(cycles):
                     for i in range(samples):
-                        for _ in range(int(self.spr/(i+1))):
+                        for _ in range(int(self.spr/samples)):
                             stepper.value(1)
                             sleep(self.delay)
                             stepper.value(0)
                             sleep(self.delay)
+
+                        self.ejack.pull_down(1200, 0.001)
+                        self.echem.applied_potential(1) # testing
+
                         self.collected_data.append(('Sample {}:'.format(i+1), sampler.sampler(acquisition_time, intervals, raw2avg)))
+
+                        self.echem.release()
+                        self.ejack.lift_up(1200, 0.001)
                 response = ({'header': 'sampling'})
                 response.update({'body': self.collected_data})
                 response.update({'notes': [samples, acquisition_time, intervals, raw2avg]})
 
-                sampler.deinit()
+                # self.echem.deinit()
+                # sampler.deinit()
+                self.interrupter()
 
                 with open('resp.txt', 'w') as resp:
                     resp.write(json.dumps(response))
 
                 with open('resp.txt', 'r') as r:
                     for line in r:
-                        return CommandHandler().sender(line)
+                        SerialConnection().sr_sender(line)
+                _thread.start_new_thread('status_thrd', tft.status_thrd, ())
+                print('sender is done')
+                return 'Done sending data.'
 
             except KeyboardInterrupt:
                 print(RED + 'stepper: aborted!' + WHITE)
@@ -415,11 +467,8 @@ class SamplingModule:
             except Exception as e:
                 print(e)
                 self.interrupter()
-            finally:
-                stepper.value(0)
-                self.interrupter()
 
-    def interrupter(self):
+    def interrupter(self, delay=0.01):
         """Motor rotates clockwise to finally be stopped by the opto-interrupter."""
         self.dir.value(0)
         self.pwr.value(1)
@@ -427,16 +476,35 @@ class SamplingModule:
         try:
             if self.intrptr.value():
                 self.pwr.value(0)
-                # print(GREEN + "stepper has already been in point zero." + WHITE)
                 return
             while True:
                 stepper.value(1)
-                sleep(0.005)
+                sleep(delay)
                 stepper.value(0)
-                # print("stepper is moving to the point zero.")
                 if self.intrptr.value():
                     self.pwr.value(0)
                     break
+            return
+        except KeyboardInterrupt:
+            self.pwr.value(0)
+            return 'aborted!'
+        except Exception as e:
+            print(e)
+            self.pwr.value(0)
+            return 'shutting down.'
+
+    def stpr_chk(self, delay=0.01, duration=10):
+        """Motor rotates clockwise to finally be stopped by the opto-interrupter."""
+        self.dir.value(0)
+        self.pwr.value(1)
+        stepper = Pin(self.step_pin, Pin.OUT)
+
+        try:
+            for _ in range(int(duration/delay)):
+                stepper.value(1)
+                sleep(delay)
+                stepper.value(0)
+            self.pwr.value(0)
             return
         except KeyboardInterrupt:
             self.pwr.value(0)
@@ -451,10 +519,11 @@ class DisplayModule:
     """handles the TFT (128x128 pixels) LCD module."""
     def __init__(self):
         self.tft = TFT()
-        self.tft.init(self.tft.ST7735R, speed=10000000, spihost=self.tft.VSPI, mosi=23, miso=19, clk=18, cs=5, dc=15,rst_pin=26, hastouch=False, bgr=False, width=128, height=128)
-        tft.init(tft.ST7735R, speed=10000000, spihost=tft.VSPI, mosi=23, miso=19, clk=18, cs=5, dc=15,rst_pin=26, hastouch=False, bgr=False, width=128, height=128)
+        self.tft.init(self.tft.ST7735R, speed=10000000, spihost=self.tft.VSPI, mosi=23, miso=19, clk=18, cs=5, dc=15,rst_pin=26, hastouch=False, bgr=False, width=128, height=128, rot=2) # lcd flipped
+        # self.tft.tft_writecmd(ST7735_INVOFF)
+        # tft.init(tft.ST7735R, speed=10000000, spihost=tft.VSPI, mosi=23, miso=17, clk=18, cs=5, dc=15,rst_pin=16, hastouch=False, bgr=False, width=128, height=128, invrot=2)
         self.max_x, self.max_y = self.tft.screensize()
-        self.init_x, self.init_y = 2, 3
+        self.init_x, self.init_y = 2, 10
         self.rtc = RTC()
         self.adc = DetectionModule(36)
         self.fan = Pin(14, Pin.OUT)
@@ -468,17 +537,17 @@ class DisplayModule:
             self.rtc.ntp_sync(server='cn.pool.ntp.org', tz='CST-8')
             sleep(2)
 
-    def welcome(self, signal):
+    def logo(self, signal):
         """Welcome image."""
         if signal:
-            self.tft.image(self.init_x + 6, self.init_y + 32, 'welcome.jpg', 2)
-            sleep(3)
+            self.tft.image(12, 2, 'logo.jpg', 2)
+            sleep(5)
         else:
             self.clear_panel(self.init_x + 2, self.init_y + 21, 120, 110)
 
     def frame(self):
         """Draws a frame arond the LCD."""
-        self.tft.rect(self.init_x, self.init_y, self.max_x, self.max_y, color=self.tft.BLUE)
+        self.tft.rect(self.init_x, self.init_y, self.max_x - self.init_x, self.max_y - self.init_y, color=self.tft.BLUE)
 
     def write(self, font, txt, color, x=2, y=3):
         self.tft.font(font)
@@ -491,52 +560,55 @@ class DisplayModule:
         self.tft.rect(self.init_x + a, self.init_y + b, i, j, color=self.tft.BLACK, fillcolor=self.tft.BLACK)
 
     def time_panel(self):
-        self.clear_panel(self.init_x + 45, self.init_y + 109, 35, 12)  # TIME panel
-        self.write('FONTS/font10B.fon', txt=strftime('%H:%M', localtime()), color=self.tft.GREEN, x=self.init_x + 50,
-                   y=self.init_y + 114)
+        self.clear_panel(self.init_x + 45, self.init_y + 100, 35, 5)  # TIME panel
+        self.write('FONTS/font10B.fon', txt=strftime('%H:%M', localtime()), color=self.tft.GREEN, x=self.init_x + 50, y=self.init_y + 100)
 
     def date_panel(self):
-        self.clear_panel(self.init_x + 26, self.init_y + 96, 72, 12)  # DATE panel
+        self.clear_panel(self.init_x + 26, self.init_y + 91, 72, 12)  # DATE panel
         # day = strftime('%a', localtime())
         # self.write(font=self.tft.FONT_Default, txt=day, x=5, y=5)
         date = strftime('%d-%b-%Y', localtime())
-        self.write('FONTS/font10B.fon', txt=date, color=self.tft.GREEN, x=self.init_x + 32, y=self.init_y + 100)
+        self.write('FONTS/font10B.fon', txt=date, color=self.tft.GREEN, x=self.init_x + 32, y=self.init_y + 91)
 
     def ambient_sensor(self):
-        self.clear_panel(self.init_x + 103, self.init_y + 65, 24, 12)  # HUMIDITY panel
-        self.clear_panel(self.init_x + 5, self.init_y + 24, 93, 40)  # MAIN panel
-
+        sleep(1)
+        self.clear_panel(self.init_x + 100, self.init_y + 55, 24, 12)  # HUMIDITY panel
+        self.clear_panel(self.init_x + 5, self.init_y + 110, 93, 40)  # MAIN panel
         _sensor = self.tmp.read()
-        temperature, humidity = _sensor[0], _sensor[1]
+        if _sensor:
+            temperature, humidity = _sensor[0], _sensor[1]
 
-        self.write('FONTS/font10.fon', txt=str(humidity), color=self.tft.WHITE, x=self.init_x + 103, y=self.init_y + 65)
-        self.write('FONTS/font48.fon', txt=str(temperature), color=self.tft.RED, x=self.init_x + 5, y=self.init_y + 37)
-        self.write('FONTS/font10.fon', txt='o', color=self.tft.RED, x=self.init_x + 101, y=self.init_y + 37)
-        self.write('FONTS/font20B.fon', txt='C', color=self.tft.RED, x=self.init_x + 105, y=self.init_y + 42)
+            self.write('FONTS/font10.fon', txt=str(humidity), color=self.tft.WHITE, x=self.init_x + 100, y=self.init_y + 65)
+            self.write('FONTS/font48.fon', txt=str(temperature), color=self.tft.RED, x=self.init_x + 5, y=self.init_y + 31)
+            self.write('FONTS/font10.fon', txt='o', color=self.tft.RED, x=self.init_x + 101, y=self.init_y + 37)
+            self.write('FONTS/font20B.fon', txt='C', color=self.tft.RED, x=self.init_x + 105, y=self.init_y + 42)
+            # self.frame()
+        else:
+            print('Temperature sensor is not connected.')
 
     def hv_panel(self, signal):
-        self.clear_panel(self.init_x + 5, self.init_y + 86, 40, 20)
+        self.clear_panel(self.init_x + 5, self.init_y + 75, 40, 20)
         if signal:
             collected_samples = self.adc.sampler(3, 1, 5)
             voltage = 'HV Output: {:.1f} V'.format(sum(collected_samples)/len(collected_samples))
-            self.write('FONTS/font10.fon', txt=voltage, color=self.tft.BLUE, x=self.init_x + 5, y=self.init_y + 86)
+            self.write('FONTS/font10.fon', txt=voltage, color=self.tft.BLUE, x=self.init_x + 5, y=self.init_y + 80)
             self.adc.deinit()
         else:
             self.clear_panel(self.init_x + 5, self.init_y + 76, 40, 20)
 
     def serial_status(self, signal):
-        self.clear_panel(self.init_x + 104, self.init_y + 3, 22, 22)
+        self.clear_panel(self.init_x + 100, self.init_y + 3, 22, 22)
         if signal:
-            self.tft.image(self.init_x + 104, self.init_y + 3, 'ICONS/serial.jpg', 2, self.tft.JPG)
+            self.tft.image(self.init_x + 100, self.init_y + 3, 'ICONS/serial.jpg', 2, self.tft.JPG)
         else:
-            self.tft.image(self.init_x + 104, self.init_y + 3, 'ICONS/noSerial.jpg', 2, self.tft.JPG)
+            self.tft.image(self.init_x + 100, self.init_y + 3, 'ICONS/noSerial.jpg', 2, self.tft.JPG)
 
     def wifi_status(self, signal):
-        self.clear_panel(self.init_x + 80, self.init_y + 3, 22, 22)
+        self.clear_panel(self.init_x + 78, self.init_y + 3, 22, 22)
         if signal:
-            self.tft.image(self.init_x + 80, self.init_y + 3, 'ICONS/wifi.jpg', 2, self.tft.JPG)
+            self.tft.image(self.init_x + 78, self.init_y + 3, 'ICONS/wifi.jpg', 2, self.tft.JPG)
         else:
-            self.tft.image(self.init_x + 80, self.init_y + 3, 'ICONS/noWifi.jpg', 2, self.tft.JPG)
+            self.tft.image(self.init_x + 78, self.init_y + 3, 'ICONS/noWifi.jpg', 2, self.tft.JPG)
 
     def temp_status(self, signal='idle'):
         self.clear_panel(self.init_x + 56, self.init_y + 3, 22, 22)
@@ -573,7 +645,7 @@ class DisplayModule:
 
     def tft_close(self):
         self.clear()
-        self.frame()
+        # self.frame()
         self.write(font='FONTS/font20B.fon', txt='deinitialized!', color=self.TFT.RED, x=20, y=60)
         self.tft.deinit()
         print(RED + 'TFT: module deinitialized.' + WHITE)
@@ -584,14 +656,19 @@ class DisplayModule:
         while True:
             ntf = _thread.getnotification()
             if ntf == _thread.EXIT:
-                print('status_thrd: EXIT command received.')
                 return
+            elif ntf == _thread.SUSPEND:
+                for thrd in _thread.list(False):
+                    if thrd[2] == 'status_thrd':
+                        _thread.suspend(thrd[0])
+                while _thread.wait() != _thread.RESUME:
+                    pass
             try:
                 self.ntp()
-                # self.ambient_sensor()
+                self.ambient_sensor()
                 self.date_panel()
                 self.time_panel()
-                sleep(10)
+                sleep(30)
             except KeyboardInterrupt:
                 print(RED + 'TFT: aborted!' + WHITE)
                 break
@@ -602,11 +679,10 @@ class DisplayModule:
 class SerialConnection:
     """Handles the serial connection and data transfer over the serial connection."""
     def __init__(self):
-        self.read = ''
-        self.signal = ''
-        self.content = ''
+        self.read, self.signal, self.content= '', '', ''
         self.opr = CommandHandler()
         self.clear = Clear()
+        self.seg_size = 1024
 
     def read_until(self, ending, timeout=10000):
         self.read = stdin_get(1, timeout)
@@ -622,29 +698,63 @@ class SerialConnection:
                     new_data = stdin_get(1, timeout)
                     self.read += new_data
                     timeout_count = 0
-
             else:
                 timeout_count += 1
                 if timeout is not None and timeout_count >= timeout:
                     break
         return self.read
 
-    def sr_handler(self, cmd):
-        """dispatching the commands to the operator."""
-        self.opr.operator_func(cmd)
-        self.sr_receiver()
+    def sr_sender(self, response):
+        """Sends the response back to GUI over serial."""
+        self.clear()
+        def chopper(cmd):
+            data = []
+            segments = [cmd[i:i + self.seg_size] for i in range(0, len(cmd), self.seg_size)]
+            for idx, segment in enumerate(segments, start=1):
+                if segment == segments[-1]:
+                    data.append(segment + '*#')
+                else:
+                    data.append(segment + '<{}/{}>_#'.format(idx, len(segments)))
+            return data
+        # print(response, type(response))
+        if response:
+            if len(response) > self.seg_size:
+                for data in ([chunk for chunk in chopper(response)]):
+                    for _ in range(3):
+                        stdout_put(data)
+                        sleep(0.125)
+                        resp = self.read_until('#', 5000)
+                        if 'EOF received.' in resp:
+                            sleep(0.002)
+                            return '\nresponse was sent, exiting the sender, chopper involved.'
+                        elif 'got it.' in resp:
+                            sleep(0.002)
+                            break
+                        else:
+                            sleep(0.125)
+            else:
+                for _ in range(3):
+                    stdout_put(response + "*#")
+                    sleep(0.125)
+                    resp = self.read_until('#', 5000)
+                    if 'EOF received.' in resp:
+                        sleep(0.002)
+                        return '\nresponse was sent, exiting the sender, no chopper.'
+                    else:
+                        sleep(0.125)
+        return '\nsender: done.'
 
     def sr_receiver(self):
         """Receives the commands over serial.
         type !# to exit.
         """
         self.clear()
-        self.content = ''
-        self.signal = ''
+        self.content, self.signal = '', ''
+
         while True:
             while 'go#' not in self.signal and '!#' not in self.signal:
                 stdout_put('sr_receiver: READY\n')
-                sleep(2)
+                sleep(1)
                 self.signal = self.read_until('#')
             if '!#' in self.signal:
                 print('sr_receiver:' + RED + ' aborted!' + WHITE)
@@ -655,6 +765,7 @@ class SerialConnection:
                 self.signal = ''
             while '*' not in self.content:
                 try:
+                    sleep(0.125)
                     data = self.read_until('#')
                     if '#' in data and data[:-2] not in self.content:
                         if data[-2] == '*':
@@ -663,24 +774,29 @@ class SerialConnection:
                         elif data[-2] == '_':
                             self.content += data[:-2]
                             stdout_put('got it.\n')
+                            sleep(0.125)
                         else:
-                            sleep(1)
+                            sleep(0.125)
                     else:
-                        sleep(1)
+                        sleep(0.125)
                 except Exception as e:
                     print(e)
                     break
-            sleep(1)
+            sleep(0.25)
             if '*' in self.content:
                 stdout_put('EOF received.\n')
-                sleep(2)
+                sleep(1)
                 with open('cmd.txt', 'w') as raw_cmd:
                     raw_cmd.write(self.content[:-1])
                 self.content = ''
                 with open('cmd.txt', 'r') as order:
                     for line in order:
-                        cmd = eval(line)
-                        self.sr_handler(cmd)
+                        self.sr_sender(self.opr.operator(eval(line)))
+                print('returned back to receiver.')
+            else:
+                return "operator: invalid command."
+            print('reruning the receiver')
+            self.sr_receiver()
         return 'exiting the sr_receiver.'
 
 class WifiConnection:
@@ -703,7 +819,6 @@ class WifiConnection:
         while True:
             try:
                 self.clear()
-                # print('\nwifi_thrd: READY.')
                 sock.listen(5)
                 conn, _ = sock.accept()
                 while True:
@@ -712,7 +827,7 @@ class WifiConnection:
                             cmd = conn.recv(4096).decode()
                             parsed_cmd = json.loads(cmd)
                             if parsed_cmd['header'] in ['run', 'tst']:
-                                conn.sendall(opr.operator_func(parsed_cmd))
+                                conn.sendall(opr.operator(parsed_cmd))
                                 break
                                 # sock.close()
                             else:
@@ -748,15 +863,15 @@ class WifiConnection:
                         if "#" in line:
                             pass
                         elif "ip" in line:
-                            ip = line.strip().split(' ')[2]
+                            _ip = line.strip().split(' ')[2]
                         elif "port" in line:
-                            port = int(line.strip().split(' ')[2])
+                            _port = int(line.strip().split(' ')[2])
                         elif "subnet" in line:
-                            subnet = line.strip().split(' ')[2]
+                            _subnet = line.strip().split(' ')[2]
                         elif "gateway" in line:
-                            gateway = line.strip().split(' ')[2]
+                            _gateway = line.strip().split(' ')[2]
                         elif "dns" in line:
-                            dns = line.strip().split(' ')[2]
+                            _dns = line.strip().split(' ')[2]
                         elif "essid" in line:
                             essid = line.strip().split(' ')[2]
                         elif "password" in line:
@@ -814,19 +929,22 @@ def main():
             gc.threshold(gc.mem_free() // 4 + gc.mem_alloc())
             if gc.mem_free() < gc.threshold():
                 gc.collect()
-                # print('available memory: {}'.format(gc.mem_free()))
             sleep(10)
 
     try:
         wf = WifiConnection()
+
+        global tft
         tft = DisplayModule()
         tft.clear()
-        tft.welcome(True)
+        tft.logo(True)
+        tft.logo(False)
+        tft.clear()
         tft.connect_status()
         tft.serial_status(False)
         tft.temp_status()
-        tft.welcome(False)
-        tft.frame()
+        # tft.frame()
+        tft.ambient_sensor()
         print('TFT module initialised.')
 
         print('establishing wifi connection.')
@@ -843,7 +961,7 @@ def main():
 
         print('initialising the stepper.')
         tft.opr_status('stepper')
-        stpr = SamplingModule(13, 33, 32, 35)
+        stpr = SamplingModule()
         stpr.interrupter()
         print(YELLOW + 'stepper adjusted to point zero.' + GREEN)
         tft.opr_status('done')
@@ -859,6 +977,7 @@ def main():
             sleep(1)
 
         print('establishing serial connection.')
+        print('to exit the serial receiver type -> !# ')
         tft.serial_status(True)
         sr = SerialConnection()
         sleep(3)
