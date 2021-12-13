@@ -1,0 +1,31 @@
+<<<<<<< HEAD
+#### micropy ####
+.micropy/*
+.pylintrc
+dev-requirements.txt
+micropy.json
+requirements.txt
+pymakr.conf
+
+#### vscode ####
+.vscode/*
+.vscode/settings.json
+.vscode/tasks.json
+.vscode/launch.json
+.vscode/extensions.json
+*.code-workspace
+=======
+### Irrelevant files ###
+Notes.txt
+junk_test.py
+test.py
+resp.txt
+latest.data.csv
+__pycache__/*
+Deprecated/*
+.vscode/*
+
+### Themes ###
+Themes/*
+
+>>>>>>> LucidSens_GUI/CL_dedicated
