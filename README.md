@@ -18,6 +18,9 @@ https://github.com/Haghighatbin/LucidSens/tree/master/PCB_Schematics_Layouts
 # CAD files
 https://github.com/Haghighatbin/LucidSens/tree/master/CADs
 
+# 3D View
+https://user-images.githubusercontent.com/10771949/146338794-2b45d992-ebb1-41cf-bab1-338458c2112e.mp4
+
 # Blueprint 
 ![Blueprint](https://user-images.githubusercontent.com/10771949/145778049-273bda3b-fbe4-4f7a-9181-483e26bb7e1b.jpg)
 
