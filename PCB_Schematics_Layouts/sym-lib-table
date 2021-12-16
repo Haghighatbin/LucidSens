@@ -1,0 +1,4 @@
+(sym_lib_table
+  (lib (name LucidSens_1.05v-rescue)(type Legacy)(uri ${KIPRJMOD}/LucidSens_1.05v-rescue.lib)(options "")(descr ""))
+  (lib (name LucidSens_2.01v-rescue)(type Legacy)(uri ${KIPRJMOD}/LucidSens_2.01v-rescue.lib)(options "")(descr ""))
+)
