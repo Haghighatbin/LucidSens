@@ -22,7 +22,7 @@ from machine import Pin, ADC, DAC, PWM, RTC, DHT, stdin_get, stdout_put
 from utime import sleep, strftime, localtime
 import usocket as socket
 import ujson as json
-# from upysh import *
+from upysh import *
 
 # Color Codes
 GREEN = '\033[92m'
@@ -35,19 +35,38 @@ WHITE = '\033[97m'
 # ST7735_INVOFF = const(0x20)
 # ST7735_INVON = const(0x21)
 
-gc.enable()
-print(GREEN + 'THREAD stack_size is: {}'.format(_thread.stack_size(6*4096)))
 for p in [5, 13, 14, 15, 21]:
     Pin(p, Pin.OUT, value=0)
 print('pins 5, 13, 14, 15, 21 were pulled down.' + WHITE)
+print(GREEN + 'THREAD stack_size is: {}'.format(_thread.stack_size(4 * 4096)))
+gc.enable()
 
-class kill:
+class MemSweep:
+    def gc_thrd():
+        _thread.allowsuspend(True)
+        while True:
+            ntf = _thread.getnotification()
+            if ntf == _thread.EXIT:
+                return
+            elif ntf == _thread.SUSPEND:
+                for thrd in _thread.list(False):
+                    if thrd[2] == 'gc_thrd':
+                        _thread.suspend(thrd[0])
+                while _thread.wait() != _thread.RESUME:
+                    pass
+
+            gc.threshold(gc.mem_free() // 4 + gc.mem_alloc())
+            if gc.mem_free() < gc.threshold():
+                gc.collect()
+            sleep(10)
+
+class KillThreads:
     def __repr__(self):
         return _thread.notify(0, _thread.EXIT)
     def __call__(self):
         return self.__repr__()
 
-class Clear:
+class ClearScreen:
     def __repr__(self):
         return "\x1b[2J\x1b[H"
     def __call__(self):
@@ -71,7 +90,7 @@ class TemperatureSensor:
 class CommandHandler:
     """Handles the commands received from the GUI and calls the appropriate modules."""
     def __init__(self):
-        self.clear = Clear()
+        self.clear = ClearScreen()
 
     def test_mod(self, iterations):
         """Checks the validity of USB-UART connection. Generates a list of an astroid's coordinates as a test sample."""
@@ -107,14 +126,14 @@ class CommandHandler:
             # This code-block in thread halts the CPU!
             # _thread.start_new_thread(...)
             stpr.sampling_thrd(0, 1,
+                float(command['body']['e']),      # applied potential
                 float(command['body']['sqt']),    # quiet time
                 int(command['body']['sn']),       # number of samples
                 float(command['body']['st']),     # total sampling time spent on each sample
                 float(command['body']['si']),     # sampling intervals
                 int(command['body']['r2avg']),    # raw-to-average
                 str(command['body']['pmr']),      # photodetection mode
-                float(command['body']['pv']),     # high voltage value
-                float(command['body']['e']))      # applied potential
+                float(command['body']['pv']))     # high voltage value
 
         elif command['header'] == 'kill':
             for thrd in _thread.list(False):
@@ -336,7 +355,7 @@ class SamplingModule:
                 self.current_temp = self._current_temp.read()
                 sleep(1)
                 if self.current_temp is not False:
-                    tft.ambient_sensor()
+                    tft.ambient_temp_sensor()
                     if self.current_temp[0] < int(self.target_temp - 1):
                         tft.temp_status('rising')
                         if self.pwr.value():
@@ -389,7 +408,7 @@ class SamplingModule:
                                 self.current_temp = self._current_temp.read()
                                 # print("current temperature: {}".format(self.current_temp[0]))
                                 sleep(1)
-                                tft.ambient_sensor()
+                                tft.ambient_temp_sensor()
 
                                 if self.timer < 5:
                                     stepper.deinit()
@@ -406,11 +425,16 @@ class SamplingModule:
                     pin.value(0)
                 return e
 
-    def sampling_thrd(self, direction=0, cycles=1, quiet_time=2.0, samples=3, acquisition_time=1, intervals=0.1, raw2avg=10, adc_read='Slow', pv=30, e=1.0):
+    def sampling_thrd(self, direction=0, cycles=1, e=1.0, quiet_time=2.0, samples=3, acquisition_time=1, intervals=0.1, raw2avg=10, adc_read='Slow', pv=30):
         """Motor rotates clockwise for [revs]cycles;
         in each cycle rotates for 200/[samples] * 1.8 degrees;
         stops for [acquisition_time]seconds on each sample."""
-        # _thread.allowsuspend(True)
+
+        for thrd in _thread.list(False):
+            if thrd[2] in ['gc_thrd', 'status_thrd']:
+                _ = _thread.notify(thrd[0], _thread.EXIT)
+                sleep(0.25)
+
         sleep(quiet_time)
         stepper = Pin(self.step_pin, Pin.OUT)
         self.collected_data = []
@@ -421,9 +445,6 @@ class SamplingModule:
         self.interrupter()
         self.pwr.value(1)
         self.dir.value(direction if direction in [0, 1] else 0)
-        for thrd in _thread.list(False):
-            if thrd[2] == 'status_thrd':
-                _thread.notify(thrd[0], _thread.EXIT)
 
         while True:
             try:
@@ -436,7 +457,7 @@ class SamplingModule:
                             sleep(self.delay)
 
                         self.ejack.pull_down(1200, 0.001)
-                        self.echem.applied_potential(1) # testing
+                        self.echem.applied_potential(e)
 
                         self.collected_data.append(('Sample {}:'.format(i+1), sampler.sampler(acquisition_time, intervals, raw2avg)))
 
@@ -447,7 +468,7 @@ class SamplingModule:
                 response.update({'notes': [samples, acquisition_time, intervals, raw2avg]})
 
                 # self.echem.deinit()
-                # sampler.deinit()
+                sampler.deinit()
                 self.interrupter()
 
                 with open('resp.txt', 'w') as resp:
@@ -456,8 +477,12 @@ class SamplingModule:
                 with open('resp.txt', 'r') as r:
                     for line in r:
                         SerialConnection().sr_sender(line)
-                _thread.start_new_thread('status_thrd', tft.status_thrd, ())
-                print('sender is done')
+                sleep(0.25)
+                
+                _ = _thread.start_new_thread('status_thrd', tft.status_thrd, ())
+                sleep(0.1)
+                # _ = _thread.start_new_thread('gc_thrd', MemSweep.gc_thrd, ())
+                # sleep(0.1)
                 return 'Done sending data.'
 
             except KeyboardInterrupt:
@@ -467,6 +492,7 @@ class SamplingModule:
             except Exception as e:
                 print(e)
                 self.interrupter()
+                return
 
     def interrupter(self, delay=0.01):
         """Motor rotates clockwise to finally be stopped by the opto-interrupter."""
@@ -570,7 +596,7 @@ class DisplayModule:
         date = strftime('%d-%b-%Y', localtime())
         self.write('FONTS/font10B.fon', txt=date, color=self.tft.GREEN, x=self.init_x + 32, y=self.init_y + 91)
 
-    def ambient_sensor(self):
+    def ambient_temp_sensor(self):
         sleep(1)
         self.clear_panel(self.init_x + 100, self.init_y + 55, 24, 12)  # HUMIDITY panel
         self.clear_panel(self.init_x + 5, self.init_y + 110, 93, 40)  # MAIN panel
@@ -665,7 +691,7 @@ class DisplayModule:
                     pass
             try:
                 self.ntp()
-                self.ambient_sensor()
+                self.ambient_temp_sensor()
                 self.date_panel()
                 self.time_panel()
                 sleep(30)
@@ -681,7 +707,7 @@ class SerialConnection:
     def __init__(self):
         self.read, self.signal, self.content= '', '', ''
         self.opr = CommandHandler()
-        self.clear = Clear()
+        self.clear = ClearScreen()
         self.seg_size = 1024
 
     def read_until(self, ending, timeout=10000):
@@ -706,7 +732,7 @@ class SerialConnection:
 
     def sr_sender(self, response):
         """Sends the response back to GUI over serial."""
-        self.clear()
+        self.clear
         def chopper(cmd):
             data = []
             segments = [cmd[i:i + self.seg_size] for i in range(0, len(cmd), self.seg_size)]
@@ -716,7 +742,6 @@ class SerialConnection:
                 else:
                     data.append(segment + '<{}/{}>_#'.format(idx, len(segments)))
             return data
-        # print(response, type(response))
         if response:
             if len(response) > self.seg_size:
                 for data in ([chunk for chunk in chopper(response)]):
@@ -748,7 +773,7 @@ class SerialConnection:
         """Receives the commands over serial.
         type !# to exit.
         """
-        self.clear()
+        self.clear
         self.content, self.signal = '', ''
 
         while True:
@@ -761,7 +786,7 @@ class SerialConnection:
                 sys.exit(0)
             else:
                 stdout_put('got it.\n')
-                self.clear()
+                self.clear
                 self.signal = ''
             while '*' not in self.content:
                 try:
@@ -792,10 +817,8 @@ class SerialConnection:
                 with open('cmd.txt', 'r') as order:
                     for line in order:
                         self.sr_sender(self.opr.operator(eval(line)))
-                print('returned back to receiver.')
             else:
                 return "operator: invalid command."
-            print('reruning the receiver')
             self.sr_receiver()
         return 'exiting the sr_receiver.'
 
@@ -806,7 +829,7 @@ class WifiConnection:
     """
     def __init__(self):
         self.p_led = Pin(2, Pin.OUT)
-        self.clear = Clear()
+        self.clear = ClearScreen()
         self.station = WLAN(STA_IF)
         self.station.active(True)
 
@@ -880,7 +903,6 @@ class WifiConnection:
                             pass
         except Exception as e:
             print(e)
-        # print("connecting to the pre-defined:\nessid ---> {} ||| password ---> {}".format(essid, password))
         self.station.connect(essid, password)
         sleep(3)
         if self.station.isconnected():
@@ -898,7 +920,6 @@ class WifiConnection:
     def wf_disconnect(self):
         """Manages Wifi disconnection."""
         self.station.disconnect()
-        # print("wifi_thrd: shutting down the wifi.")
         self.station.active(False)
         self.p_led.value(0)
 
@@ -916,24 +937,9 @@ class WifiConnection:
                True: "hidden"}
         return lst.get(mod)
 
-    # def __str__(self):
-    #     print("WiFiConn class is activated.")
-
 def main():
-    def gc_thrd():
-        _thread.allowsuspend(True)
-        while True:
-            ntf = _thread.getnotification()
-            if ntf == _thread.EXIT:
-                return 'gc_thrd: EXIT command received.'
-            gc.threshold(gc.mem_free() // 4 + gc.mem_alloc())
-            if gc.mem_free() < gc.threshold():
-                gc.collect()
-            sleep(10)
-
     try:
         wf = WifiConnection()
-
         global tft
         tft = DisplayModule()
         tft.clear()
@@ -943,8 +949,7 @@ def main():
         tft.connect_status()
         tft.serial_status(False)
         tft.temp_status()
-        # tft.frame()
-        tft.ambient_sensor()
+        tft.ambient_temp_sensor()
         print('TFT module initialised.')
 
         print('establishing wifi connection.')
@@ -966,12 +971,12 @@ def main():
         print(YELLOW + 'stepper adjusted to point zero.' + GREEN)
         tft.opr_status('done')
 
-        _thread.start_new_thread('gc_thrd', gc_thrd, ())
-        print(CYAN + 'gc_thrd initialised.' + GREEN)
+        # _ = _thread.start_new_thread('gc_thrd', MemSweep.gc_thrd, ())
+        # print(CYAN + 'gc_thrd initialised.' + GREEN)
         sleep(1)
 
         if wf.station.isconnected():
-            _thread.start_new_thread('status_thrd', tft.status_thrd, ())
+            _ = _thread.start_new_thread('status_thrd', tft.status_thrd, ())
             sleep(1)
             print(CYAN + 'status_thrd initialised.' + GREEN)
             sleep(1)
@@ -991,4 +996,6 @@ def main():
         print(e)
         sys.exit(1)
 if __name__ == '__main__':
+    clear = ClearScreen()
+    kill = KillThreads()
     main()
