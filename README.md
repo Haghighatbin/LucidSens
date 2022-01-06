@@ -26,6 +26,7 @@ https://github.com/Haghighatbin/LucidSens/tree/master/CADs
 https://user-images.githubusercontent.com/10771949/146338794-2b45d992-ebb1-41cf-bab1-338458c2112e.mp4
 
 # Blueprint 
-![Blueprint](https://user-images.githubusercontent.com/10771949/145778049-273bda3b-fbe4-4f7a-9181-483e26bb7e1b.jpg)
+![Blueprint](https://user-images.githubusercontent.com/10771949/148339024-f001e29f-0144-4e3f-be11-59021a61e30a.jpg)
+
 
 
