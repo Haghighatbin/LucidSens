@@ -18,6 +18,7 @@ https://github.com/Haghighatbin/LucidSens/tree/master/Software
 
 # PCB Layout and Schematics
 https://github.com/Haghighatbin/LucidSens/tree/master/PCB_Schematics_Layouts
+![LucidSens_2 01v](https://user-images.githubusercontent.com/10771949/148480628-4447a5c0-6cc4-4ab4-ab1d-d9189cb89efb.png)
 
 # CAD files
 https://github.com/Haghighatbin/LucidSens/tree/master/CADs
