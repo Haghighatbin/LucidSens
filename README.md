@@ -15,6 +15,7 @@ https://github.com/Haghighatbin/LucidSens/tree/master/Firmware
 # Software
 Created by: PyQt5 and UI code generator 5.15.4 - sourcefile was written in Python 3.5<br />
 https://github.com/Haghighatbin/LucidSens/tree/master/Software
+![LucidSens_GUI](https://user-images.githubusercontent.com/10771949/148481441-8a7e2a4e-e871-4713-838e-3adf6f83f3be.jpg)
 
 # PCB Layout and Schematics
 https://github.com/Haghighatbin/LucidSens/tree/master/PCB_Schematics_Layouts
